@@ -1,102 +1,20 @@
 name: Build & Publish Agents
 
-# Thin caller: figures out which agents changed, then fans out one call
-# per agent to AgentYard's platform-provided reusable pipeline
-# (lint -> build -> smoke test -> push -> announce). No build/push logic
-# lives here — that's owned centrally so every onboarded agent repo gets
-# fixes and new stages for free.
-
 on:
-  push:
-    branches: [main]
-    paths:
-      - "agents/**"
-      - "vendor-agentyard-sdk/**"
-      - ".github/workflows/ci.yml"
-  pull_request:
-    paths:
-      - "agents/**"
-      - "vendor-agentyard-sdk/**"
-      - ".github/workflows/ci.yml"
   workflow_dispatch:
-    inputs:
-      agent:
-        description: 'Agent to build ("all" for every agent)'
-        required: true
-        default: "all"
 
 jobs:
-  detect-matrix:
-    runs-on: ubuntu-latest
-    outputs:
-      agents: ${{ steps.pick.outputs.agents }}
-      ports: ${{ steps.pick.outputs.ports }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Compute list of agents to build (+ each one's port)
-        id: pick
-        shell: bash
-        run: |
-          set -e
-          all_agents=$(ls agents 2>/dev/null | sort)
-          if [ -z "$all_agents" ]; then
-            echo "agents=[]" >> "$GITHUB_OUTPUT"
-            echo "ports={}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            pick='${{ github.event.inputs.agent }}'
-            changed=$([ "$pick" = "all" ] && echo "$all_agents" || echo "$pick")
-          else
-            base_ref="${{ github.event.pull_request.base.sha || 'HEAD~1' }}"
-            changed_files=$(git diff --name-only "$base_ref" HEAD || true)
-            if echo "$changed_files" | grep -qE '^(vendor-agentyard-sdk/|\.github/)'; then
-              changed="$all_agents"
-            else
-              changed=$(echo "$changed_files" | grep -E '^agents/[^/]+/' | awk -F/ '{print $2}' | sort -u)
-            fi
-          fi
-
-          if [ -z "$changed" ]; then
-            echo "agents=[]" >> "$GITHUB_OUTPUT"
-            echo "ports={}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Port comes straight from each agent's own Dockerfile — no
-          # separate map to keep in sync by hand.
-          ports_json="{}"
-          for agent in $changed; do
-            port=$(grep -oP 'ENV YARD_PORT=\K[0-9]+' "agents/$agent/Dockerfile" || echo "9000")
-            ports_json=$(echo "$ports_json" | jq --arg k "$agent" --arg v "$port" '. + {($k): $v}')
-          done
-
-          json=$(printf '%s\n' $changed | jq -Rsc 'split("\n") | map(select(length>0))')
-          echo "agents=$json" >> "$GITHUB_OUTPUT"
-          echo "ports=$(echo "$ports_json" | jq -c .)" >> "$GITHUB_OUTPUT"
-          echo "Will build: $changed"
-
   publish:
-    needs: detect-matrix
-    if: needs.detect-matrix.outputs.agents != '[]'
-    strategy:
-      fail-fast: false
-      matrix:
-        agent: ${{ fromJson(needs.detect-matrix.outputs.agents) }}
     uses: AgentYard/AgentYard/.github/workflows/agent-ci.yml@main
     with:
-      agent-name: ${{ matrix.agent }}
-      dockerfile-path: agents/${{ matrix.agent }}/Dockerfile
-      main-path: agents/${{ matrix.agent }}/main.py
-      health-port: ${{ fromJson(needs.detect-matrix.outputs.ports)[matrix.agent] }}
+      agent-name: triage-classifier
+      dockerfile-path: agents/triage-classifier/Dockerfile
+      main-path: agents/triage-classifier/main.py
+      health-port: "9101"
       ecr-registry: ${{ vars.ECR_REGISTRY }}
       aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       agentyard-webhook-url: ${{ vars.AGENTYARD_WEBHOOK_URL }}
-      push: ${{ github.event_name != 'pull_request' }}
+      push: false
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
       YARD_WEBHOOK_SECRET: ${{ secrets.YARD_WEBHOOK_SECRET }}
