@@ -6,3 +6,15 @@ on:
 jobs:
   call-it:
     uses: AgentYard/AgentYard/.github/workflows/debug-reusable.yml@main
+    with:
+      agent-name: triage-classifier
+      dockerfile-path: agents/triage-classifier/Dockerfile
+      main-path: agents/triage-classifier/main.py
+      health-port: "9101"
+      ecr-registry: ${{ vars.ECR_REGISTRY }}
+      aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+      agentyard-webhook-url: ${{ vars.AGENTYARD_WEBHOOK_URL }}
+      push: false
+    secrets:
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      YARD_WEBHOOK_SECRET: ${{ secrets.YARD_WEBHOOK_SECRET }}
