@@ -5,12 +5,15 @@ compliance, performance, summary) from input data.
 """
 
 import json
+import logging
 import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from agentyard.v2 import MemoryContract, Resource, yard
+
+logger = logging.getLogger("report-generator-agent")
 
 SYSTEM_PROMPT = """You are a business report generation expert. Create comprehensive, well-structured reports from data.
 
@@ -92,8 +95,18 @@ async def generate_report(input: Input, ctx) -> Output:
         f"Generate a {input.report_type} report in {input.format} format from this data:\n\n"
         f"{json.dumps(input.data, indent=2)}"
     )
-    llm_text = await ctx.llm.complete(f"{SYSTEM_PROMPT}\n\n{user_prompt}")
+    # 1024 (the ctx.llm.complete default) routinely truncates a multi-section
+    # structured report mid-JSON — the model hits max_tokens before its
+    # closing braces, _parse_json_response's regex then grabs an internal
+    # brace as the "end", and json.loads fails, silently falling back to an
+    # all-default Output with no signal anywhere. 4096 gives real headroom.
+    llm_text = await ctx.llm.complete(f"{SYSTEM_PROMPT}\n\n{user_prompt}", max_tokens=4096)
     parsed = _parse_json_response(llm_text)
+    if not parsed:
+        logger.warning(
+            "report_json_parse_failed text_len=%d text_preview=%s",
+            len(llm_text), llm_text[:200].replace("\n", " "),
+        )
 
     result = Output(
         title=parsed.get("title", ""),
